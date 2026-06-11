@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Context
 
-Take-home coding challenge — prioritize polish and demo-readiness over long-term infrastructure. Frontend-only Next.js app, no backend or database. Commit directly to `main`.
+Take-home coding challenge — prioritize polish and demo-readiness over long-term infrastructure. Next.js app with no database; the only backend is `app/api/agent/route.ts`, which runs the Claude Agent SDK and requires `ANTHROPIC_API_KEY` in `.env.local` (copy `.env.example`). Commit directly to `main`.
 
 ## This is NOT the Next.js you know
 

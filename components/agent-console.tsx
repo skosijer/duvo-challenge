@@ -5,6 +5,8 @@ import {
   ArrowUp,
   Check,
   CircleAlert,
+  CircleCheck,
+  CircleX,
   Download,
   FileImage,
   FileJson,
@@ -22,7 +24,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
 import { useAgentStream } from "@/hooks/use-agent-stream"
 import { useMcpServers } from "@/hooks/use-mcp-servers"
-import type { AgentFile } from "@/lib/agent-events"
+import type { AgentFile, AgentVerdict } from "@/lib/agent-events"
 
 const MAX_INSTRUCTIONS_LENGTH = 4000
 
@@ -60,6 +62,27 @@ function downloadFile(file: AgentFile) {
   URL.revokeObjectURL(url)
 }
 
+const VERDICT_STYLES: Record<
+  AgentVerdict["fulfilled"],
+  { label: string; icon: React.ReactNode; className: string }
+> = {
+  yes: {
+    label: "Instructions fulfilled",
+    icon: <CircleCheck className="mt-0.5 size-4 shrink-0 text-primary" />,
+    className: "border-primary/30 bg-primary/5",
+  },
+  partial: {
+    label: "Partially fulfilled",
+    icon: <CircleAlert className="mt-0.5 size-4 shrink-0 text-amber-600" />,
+    className: "border-amber-600/30 bg-amber-600/5",
+  },
+  no: {
+    label: "Not fulfilled",
+    icon: <CircleX className="mt-0.5 size-4 shrink-0 text-destructive" />,
+    className: "border-destructive/30 bg-destructive/5",
+  },
+}
+
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
     <h2 className="mb-3 font-mono text-[11px] tracking-[0.18em] text-muted-foreground uppercase">
@@ -76,6 +99,7 @@ export function AgentConsole() {
     activities,
     files,
     mcpStatuses,
+    verdict,
     stats,
     error,
     run,
@@ -253,6 +277,25 @@ export function AgentConsole() {
                     </Button>
                   </div>
                 ))}
+              </div>
+            </section>
+          )}
+
+          {verdict && (
+            <section>
+              <SectionLabel>Evaluation</SectionLabel>
+              <div
+                className={`flex animate-in items-start gap-2.5 rounded-xl border p-4 text-sm fade-in slide-in-from-bottom-1 ${VERDICT_STYLES[verdict.fulfilled].className}`}
+              >
+                {VERDICT_STYLES[verdict.fulfilled].icon}
+                <div>
+                  <p className="font-medium">
+                    {VERDICT_STYLES[verdict.fulfilled].label}
+                  </p>
+                  <p className="mt-1 text-muted-foreground">
+                    {verdict.summary}
+                  </p>
+                </div>
               </div>
             </section>
           )}

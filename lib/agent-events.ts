@@ -1,6 +1,8 @@
 // Shared SSE protocol between app/api/agent/route.ts and the client stream
 // reader. Wire format: `data: <JSON.stringify(AgentEvent)>\n\n` frames, ending
-// with a single terminal `done` or `error` event.
+// with a single terminal `done` or `error` event. On success, a `verdict`
+// event (did the agent fulfill the instructions?) may arrive just before
+// `done`.
 
 export type AgentFile = {
   name: string
@@ -22,12 +24,18 @@ export type McpStatus = {
   status: string
 }
 
+export type AgentVerdict = {
+  fulfilled: "yes" | "partial" | "no"
+  summary: string
+}
+
 export type AgentEvent =
   | { type: "init"; model: string; mcpServers: McpStatus[] }
   | { type: "text"; delta: string }
   | { type: "tool_start"; id: string; name: string; label: string }
   | { type: "tool_end"; id: string }
   | ({ type: "file" } & AgentFile)
+  | ({ type: "verdict" } & AgentVerdict)
   | ({ type: "done" } & AgentStats)
   | { type: "error"; message: string }
 

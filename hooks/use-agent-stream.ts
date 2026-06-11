@@ -6,6 +6,7 @@ import type {
   AgentEvent,
   AgentFile,
   AgentStats,
+  AgentVerdict,
   McpStatus,
 } from "@/lib/agent-events"
 import type { McpServerInput } from "@/lib/mcp"
@@ -26,6 +27,7 @@ type AgentState = {
   activities: AgentActivity[]
   files: AgentFile[]
   mcpStatuses: McpStatus[]
+  verdict?: AgentVerdict
   stats?: AgentStats
   error?: string
 }
@@ -72,6 +74,11 @@ function reduceEvent(prev: AgentState, event: AgentEvent): AgentState {
             base64: event.base64,
           },
         ],
+      }
+    case "verdict":
+      return {
+        ...prev,
+        verdict: { fulfilled: event.fulfilled, summary: event.summary },
       }
     case "done":
       return {

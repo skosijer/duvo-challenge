@@ -4,8 +4,13 @@ import os from "node:os"
 import path from "node:path"
 
 import { query, type McpServerConfig } from "@anthropic-ai/claude-agent-sdk"
+import Anthropic from "@anthropic-ai/sdk"
 
-import { toolLabel, type AgentEvent } from "@/lib/agent-events"
+import {
+  toolLabel,
+  type AgentEvent,
+  type AgentVerdict,
+} from "@/lib/agent-events"
 import { inferTransport, parseMcpServerInputs } from "@/lib/mcp"
 
 const MODEL = "claude-opus-4-8"
@@ -44,6 +49,44 @@ const MIME_TYPES: Record<string, string> = {
   ".gif": "image/gif",
   ".svg": "image/svg+xml",
   ".zip": "application/zip",
+}
+
+const VERDICT_SCHEMA = {
+  type: "object",
+  properties: {
+    fulfilled: { type: "string", enum: ["yes", "partial", "no"] },
+    summary: { type: "string" },
+  },
+  required: ["fulfilled", "summary"],
+  additionalProperties: false,
+} as const
+
+async function evaluateRun(
+  instructions: string,
+  resultText: string,
+  fileNames: string[]
+): Promise<AgentVerdict> {
+  const client = new Anthropic()
+  const response = await client.messages.create({
+    model: "claude-opus-4-8",
+    max_tokens: 512,
+    system:
+      "You judge whether an AI agent fulfilled the user's instructions. You are given the instructions, the agent's final answer, and the names of any files it created. Be strict but fair: 'yes' if everything asked for was delivered, 'partial' if some of it was, 'no' if it was not. Summarize your verdict in one or two sentences addressed to the user.",
+    messages: [
+      {
+        role: "user",
+        content: [
+          `<instructions>\n${instructions}\n</instructions>`,
+          `<final_answer>\n${resultText}\n</final_answer>`,
+          `<files_created>\n${fileNames.length > 0 ? fileNames.join("\n") : "(none)"}\n</files_created>`,
+        ].join("\n\n"),
+      },
+    ],
+    output_config: { format: { type: "json_schema", schema: VERDICT_SCHEMA } },
+  })
+  const text = response.content.find((block) => block.type === "text")?.text
+  if (!text) throw new Error("empty verdict response")
+  return JSON.parse(text) as AgentVerdict
 }
 
 function friendlyError(subtype: string): string {
@@ -255,6 +298,31 @@ export async function POST(request: Request) {
             }
           } else if (message.type === "result") {
             if (message.subtype === "success") {
+              try {
+                send({
+                  type: "tool_start",
+                  id: "verdict",
+                  name: "verdict",
+                  label: "Checking the result against your instructions",
+                })
+                const entries = await readdir(runDir, { recursive: true })
+                const fileNames = []
+                for (const entry of entries.sort()) {
+                  const info = await stat(path.join(runDir, entry))
+                  if (info.isFile()) fileNames.push(entry)
+                }
+                const verdict = await evaluateRun(
+                  prompt,
+                  message.result,
+                  fileNames
+                )
+                send({ type: "tool_end", id: "verdict" })
+                send({ type: "verdict", ...verdict })
+              } catch (error) {
+                // The evaluation is best-effort; never fail the run over it.
+                console.error("[agent] verdict failed:", error)
+                send({ type: "tool_end", id: "verdict" })
+              }
               await sendRunFiles()
               send({
                 type: "done",

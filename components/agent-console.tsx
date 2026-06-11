@@ -15,11 +15,13 @@ import {
 } from "lucide-react"
 
 import { Markdown } from "@/components/markdown"
+import { McpServerPanel } from "@/components/mcp-server-panel"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
 import { useAgentStream } from "@/hooks/use-agent-stream"
+import { useMcpServers } from "@/hooks/use-mcp-servers"
 import type { AgentFile } from "@/lib/agent-events"
 
 const MAX_INSTRUCTIONS_LENGTH = 4000
@@ -68,14 +70,30 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 export function AgentConsole() {
   const [instructions, setInstructions] = useState("")
-  const { status, text, activities, files, stats, error, run, stop } =
-    useAgentStream()
+  const {
+    status,
+    text,
+    activities,
+    files,
+    mcpStatuses,
+    stats,
+    error,
+    run,
+    stop,
+  } = useAgentStream()
+  const mcp = useMcpServers()
 
   const busy = status === "starting" || status === "streaming"
   const canSubmit = instructions.trim().length > 0 && !busy
 
   const submit = () => {
-    if (canSubmit) run(instructions)
+    if (!canSubmit) return
+    run(
+      instructions,
+      mcp.servers
+        .filter((server) => server.enabled)
+        .map(({ name, url }) => ({ name, url }))
+    )
   }
 
   return (
@@ -129,6 +147,14 @@ export function AgentConsole() {
           )}
         </div>
       </form>
+
+      <McpServerPanel
+        servers={mcp.servers}
+        statuses={mcpStatuses}
+        onAdd={mcp.add}
+        onRemove={mcp.remove}
+        onToggle={mcp.toggle}
+      />
 
       {status === "idle" && (
         <div className="mt-4 flex flex-wrap gap-2">

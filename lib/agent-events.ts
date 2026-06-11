@@ -15,8 +15,15 @@ export type AgentStats = {
   costUsd: number
 }
 
+// Connection status of one MCP server, reported once the agent session
+// starts. Status values come from the Agent SDK ("connected", "failed", …).
+export type McpStatus = {
+  name: string
+  status: string
+}
+
 export type AgentEvent =
-  | { type: "init"; model: string }
+  | { type: "init"; model: string; mcpServers: McpStatus[] }
   | { type: "text"; delta: string }
   | { type: "tool_start"; id: string; name: string; label: string }
   | { type: "tool_end"; id: string }
@@ -32,6 +39,12 @@ export function toolLabel(
   name: string,
   input: Record<string, unknown>
 ): string {
+  // MCP tools are named mcp__<server>__<tool>.
+  if (name.startsWith("mcp__")) {
+    const [, server, ...rest] = name.split("__")
+    const tool = rest.join("__") || "a tool"
+    return `Using ${tool.replaceAll("_", " ")} (${server})`
+  }
   switch (name) {
     case "WebSearch":
       return typeof input.query === "string"

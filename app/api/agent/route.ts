@@ -3,9 +3,10 @@ import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
-import { query } from "@anthropic-ai/claude-agent-sdk"
+import { query, type McpServerConfig } from "@anthropic-ai/claude-agent-sdk"
 
 import { toolLabel, type AgentEvent } from "@/lib/agent-events"
+import { inferTransport, parseMcpServerInputs } from "@/lib/mcp"
 
 const MODEL = "claude-opus-4-8"
 const MAX_INSTRUCTIONS_LENGTH = 4000
@@ -63,8 +64,9 @@ function isInside(dir: string, target: string): boolean {
 
 export async function POST(request: Request) {
   let instructions: unknown
+  let mcpServersInput: unknown
   try {
-    ;({ instructions } = await request.json())
+    ;({ instructions, mcpServers: mcpServersInput } = await request.json())
   } catch {
     return Response.json({ error: "Invalid JSON body." }, { status: 400 })
   }
@@ -83,6 +85,10 @@ export async function POST(request: Request) {
       { status: 400 }
     )
   }
+  const mcpResult = parseMcpServerInputs(mcpServersInput)
+  if ("error" in mcpResult) {
+    return Response.json({ error: mcpResult.error }, { status: 400 })
+  }
   if (!process.env.ANTHROPIC_API_KEY) {
     return Response.json(
       {
@@ -96,6 +102,18 @@ export async function POST(request: Request) {
   const prompt = instructions.trim()
   const runDir = path.join(os.tmpdir(), "duvo-agent-runs", randomUUID())
   await mkdir(runDir, { recursive: true })
+
+  const mcpServers: Record<string, McpServerConfig> = {}
+  for (const server of mcpResult.servers) {
+    mcpServers[server.name] = {
+      type: inferTransport(server.url),
+      url: server.url,
+    }
+  }
+  const systemPrompt =
+    mcpResult.servers.length > 0
+      ? `${SYSTEM_PROMPT}\n- The user connected these MCP servers, which give you extra tools: ${mcpResult.servers.map((server) => server.name).join(", ")}. Use those tools when they help with the task.`
+      : SYSTEM_PROMPT
 
   const abort = new AbortController()
   request.signal.addEventListener("abort", () => abort.abort())
@@ -151,12 +169,18 @@ export async function POST(request: Request) {
           prompt,
           options: {
             model: MODEL,
-            systemPrompt: SYSTEM_PROMPT,
+            systemPrompt,
             cwd: runDir,
             tools: [...READ_ONLY_TOOLS, ...WRITE_TOOLS],
             allowedTools: READ_ONLY_TOOLS,
+            mcpServers,
+            strictMcpConfig: true,
             canUseTool: async (toolName, input) => {
               if (READ_ONLY_TOOLS.includes(toolName)) {
+                return { behavior: "allow", updatedInput: input }
+              }
+              // MCP tools come only from servers the user connected above.
+              if (toolName.startsWith("mcp__")) {
                 return { behavior: "allow", updatedInput: input }
               }
               if (WRITE_TOOLS.includes(toolName)) {
@@ -187,7 +211,14 @@ export async function POST(request: Request) {
 
         for await (const message of result) {
           if (message.type === "system" && message.subtype === "init") {
-            send({ type: "init", model: message.model })
+            send({
+              type: "init",
+              model: message.model,
+              mcpServers: message.mcp_servers.map(({ name, status }) => ({
+                name,
+                status,
+              })),
+            })
           } else if (
             message.type === "stream_event" &&
             message.parent_tool_use_id === null

@@ -2,7 +2,13 @@
 
 import { useCallback, useRef, useState } from "react"
 
-import type { AgentEvent, AgentFile, AgentStats } from "@/lib/agent-events"
+import type {
+  AgentEvent,
+  AgentFile,
+  AgentStats,
+  McpStatus,
+} from "@/lib/agent-events"
+import type { McpServerInput } from "@/lib/mcp"
 
 export type AgentStatus =
   | "idle"
@@ -19,6 +25,7 @@ type AgentState = {
   text: string
   activities: AgentActivity[]
   files: AgentFile[]
+  mcpStatuses: McpStatus[]
   stats?: AgentStats
   error?: string
 }
@@ -28,12 +35,13 @@ const INITIAL_STATE: AgentState = {
   text: "",
   activities: [],
   files: [],
+  mcpStatuses: [],
 }
 
 function reduceEvent(prev: AgentState, event: AgentEvent): AgentState {
   switch (event.type) {
     case "init":
-      return { ...prev, status: "streaming" }
+      return { ...prev, status: "streaming", mcpStatuses: event.mcpServers }
     case "text":
       return { ...prev, status: "streaming", text: prev.text + event.delta }
     case "tool_start":
@@ -89,77 +97,80 @@ export function useAgentStream() {
     abortRef.current?.abort()
   }, [])
 
-  const run = useCallback(async (instructions: string) => {
-    abortRef.current?.abort()
-    const controller = new AbortController()
-    abortRef.current = controller
+  const run = useCallback(
+    async (instructions: string, mcpServers: McpServerInput[] = []) => {
+      abortRef.current?.abort()
+      const controller = new AbortController()
+      abortRef.current = controller
 
-    setState({ ...INITIAL_STATE, status: "starting" })
+      setState({ ...INITIAL_STATE, status: "starting" })
 
-    try {
-      const res = await fetch("/api/agent", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ instructions }),
-        signal: controller.signal,
-      })
+      try {
+        const res = await fetch("/api/agent", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ instructions, mcpServers }),
+          signal: controller.signal,
+        })
 
-      if (!res.ok || !res.body) {
-        let message = "Something went wrong. Please try again."
-        try {
-          const data = (await res.json()) as { error?: string }
-          if (typeof data.error === "string") message = data.error
-        } catch {
-          // non-JSON error response; keep the generic message
+        if (!res.ok || !res.body) {
+          let message = "Something went wrong. Please try again."
+          try {
+            const data = (await res.json()) as { error?: string }
+            if (typeof data.error === "string") message = data.error
+          } catch {
+            // non-JSON error response; keep the generic message
+          }
+          setState((prev) => ({ ...prev, status: "error", error: message }))
+          return
         }
-        setState((prev) => ({ ...prev, status: "error", error: message }))
-        return
-      }
 
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ""
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ""
 
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const frames = buffer.split("\n\n")
-        buffer = frames.pop() ?? ""
-        for (const frame of frames) {
-          const line = frame.trim()
-          if (!line.startsWith("data: ")) continue
-          const event = JSON.parse(line.slice("data: ".length)) as AgentEvent
-          setState((prev) => reduceEvent(prev, event))
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const frames = buffer.split("\n\n")
+          buffer = frames.pop() ?? ""
+          for (const frame of frames) {
+            const line = frame.trim()
+            if (!line.startsWith("data: ")) continue
+            const event = JSON.parse(line.slice("data: ".length)) as AgentEvent
+            setState((prev) => reduceEvent(prev, event))
+          }
+        }
+
+        // Stream closed without a terminal done/error event.
+        setState((prev) =>
+          prev.status === "starting" || prev.status === "streaming"
+            ? {
+                ...prev,
+                status: "error",
+                error: "The connection closed before the agent finished.",
+              }
+            : prev
+        )
+      } catch {
+        if (controller.signal.aborted) {
+          setState((prev) => ({
+            ...prev,
+            status: "stopped",
+            activities: prev.activities.map((a) => ({ ...a, done: true })),
+          }))
+        } else {
+          setState((prev) => ({
+            ...prev,
+            status: "error",
+            error: "Connection lost. Please try again.",
+          }))
         }
       }
-
-      // Stream closed without a terminal done/error event.
-      setState((prev) =>
-        prev.status === "starting" || prev.status === "streaming"
-          ? {
-              ...prev,
-              status: "error",
-              error: "The connection closed before the agent finished.",
-            }
-          : prev
-      )
-    } catch {
-      if (controller.signal.aborted) {
-        setState((prev) => ({
-          ...prev,
-          status: "stopped",
-          activities: prev.activities.map((a) => ({ ...a, done: true })),
-        }))
-      } else {
-        setState((prev) => ({
-          ...prev,
-          status: "error",
-          error: "Connection lost. Please try again.",
-        }))
-      }
-    }
-  }, [])
+    },
+    []
+  )
 
   return { ...state, run, stop }
 }
